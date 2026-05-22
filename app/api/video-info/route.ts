@@ -6,6 +6,9 @@ const execAsync = promisify(exec);
 
 const YT_DLP_PATH = process.env.YT_DLP_PATH || "/home/vercel-sandbox/.local/bin/yt-dlp";
 
+// User agent to bypass bot detection
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
 export async function POST(request: NextRequest) {
   try {
     const { url } = await request.json();
@@ -21,11 +24,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid URL format" }, { status: 400 });
     }
 
+    // Build command with anti-bot flags
+    const cmd = [
+      YT_DLP_PATH,
+      "--dump-json",
+      "--no-download",
+      "--no-warnings",
+      "--no-check-certificates",
+      "--user-agent", `"${USER_AGENT}"`,
+      "--extractor-args", '"youtube:player_client=web,default;skip=hls,dash"',
+      "--no-playlist",
+      `"${url}"`
+    ].join(" ");
+
     // Get video info using yt-dlp
-    const { stdout, stderr } = await execAsync(
-      `${YT_DLP_PATH} --dump-json --no-download --no-warnings "${url}"`,
-      { timeout: 30000 }
-    );
+    const { stdout, stderr } = await execAsync(cmd, { timeout: 60000 });
 
     if (stderr && !stdout) {
       console.error("[v0] yt-dlp stderr:", stderr);

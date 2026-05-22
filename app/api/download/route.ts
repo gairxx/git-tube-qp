@@ -6,6 +6,9 @@ import path from "path";
 const YT_DLP_PATH = process.env.YT_DLP_PATH || "/home/vercel-sandbox/.local/bin/yt-dlp";
 const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || "/tmp/downloads";
 
+// User agent to bypass bot detection
+const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
 // Store active downloads
 const activeDownloads = new Map<string, {
   progress: number;
@@ -36,10 +39,14 @@ export async function POST(request: NextRequest) {
       status: "downloading",
     });
 
-    // Build yt-dlp command arguments
+    // Build yt-dlp command arguments with anti-bot flags
     const args: string[] = [
       "--newline", // Output progress on new lines
       "-o", path.join(DOWNLOADS_DIR, "%(title)s.%(ext)s"),
+      "--no-check-certificates",
+      "--user-agent", USER_AGENT,
+      "--extractor-args", "youtube:player_client=web,default;skip=hls,dash",
+      "--no-playlist",
     ];
 
     // Add format options
