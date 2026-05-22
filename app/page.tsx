@@ -1,27 +1,43 @@
 "use client"
 
-import { useState, useCallback } from "react"
-import { Download, Search, Film, Music, Settings2, Clock, Globe, Loader2 } from "lucide-react"
+import { useState, useCallback, useEffect, useRef } from "react"
+import { Download, Search, Film, Music, Settings2, Clock, Globe, Loader2, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Header } from "@/components/header"
 import { DownloadQueue, type DownloadItem } from "@/components/download-queue"
 import { SupportedSites } from "@/components/supported-sites"
 import { VideoPreview } from "@/components/video-preview"
 
 type Format = "video" | "audio"
-type Quality = "best" | "1080p" | "720p" | "480p" | "360p"
+type Quality = "best" | "2160p" | "1080p" | "720p" | "480p" | "320k" | "192k" | "128k"
 
 interface VideoInfo {
+  id: string
   title: string
-  duration: string
+  duration: number
   thumbnail: string
   uploader: string
   platform: string
+  viewCount?: number
+  likeCount?: number
+  description?: string
+  webpage_url: string
+  formats?: Array<{
+    format_id: string
+    ext: string
+    quality: string
+    height?: number
+    width?: number
+    filesize?: number
+    hasVideo: boolean
+    hasAudio: boolean
+  }>
 }
 
 export default function Home() {
@@ -29,88 +45,167 @@ export default function Home() {
   const [format, setFormat] = useState<Format>("video")
   const [quality, setQuality] = useState<Quality>("best")
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
-  const [downloads, setDownloads] = useState<DownloadItem[]>([
-    {
-      id: "1",
-      title: "Introduction to React Hooks",
-      platform: "YouTube",
-      progress: 100,
-      status: "completed",
-      format: "video",
-      quality: "1080p",
-      size: "245 MB",
-    },
-    {
-      id: "2", 
-      title: "Lo-Fi Hip Hop Radio",
-      platform: "SoundCloud",
-      progress: 67,
-      status: "downloading",
-      format: "audio",
-      quality: "320kbps",
-      size: "12 MB",
-    },
-  ])
+  const [downloads, setDownloads] = useState<DownloadItem[]>([])
+  const pollingIntervals = useRef<Map<string, NodeJS.Timeout>>(new Map())
+
+  // Format duration from seconds to mm:ss or hh:mm:ss
+  const formatDuration = (seconds: number): string => {
+    if (!seconds) return "0:00"
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    const s = Math.floor(seconds % 60)
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`
+    }
+    return `${m}:${s.toString().padStart(2, "0")}`
+  }
+
+  // Format file size
+  const formatSize = (bytes?: number): string => {
+    if (!bytes) return "Unknown"
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  }
+
+  // Poll download progress
+  const pollDownloadProgress = useCallback((downloadId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/download?id=${downloadId}`)
+        if (!response.ok) return
+        
+        const data = await response.json()
+        
+        setDownloads(prev => prev.map(d => {
+          if (d.id === downloadId) {
+            return {
+              ...d,
+              progress: data.progress || d.progress,
+              status: data.status === "completed" ? "completed" : 
+                      data.status === "error" ? "error" : 
+                      d.status,
+              size: data.filename || d.size,
+              speed: data.speed,
+              eta: data.eta,
+            }
+          }
+          return d
+        }))
+
+        // Stop polling if complete or error
+        if (data.status === "completed" || data.status === "error") {
+          clearInterval(interval)
+          pollingIntervals.current.delete(downloadId)
+        }
+      } catch (err) {
+        console.error("Error polling download:", err)
+      }
+    }, 1000)
+
+    pollingIntervals.current.set(downloadId, interval)
+  }, [])
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      pollingIntervals.current.forEach(interval => clearInterval(interval))
+    }
+  }, [])
 
   const handleFetchInfo = useCallback(async () => {
     if (!url.trim()) return
     
     setIsLoading(true)
-    // Simulate fetching video info
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-    
-    setVideoInfo({
-      title: "Sample Video Title - Amazing Content",
-      duration: "12:34",
-      thumbnail: "https://picsum.photos/seed/video/640/360",
-      uploader: "Content Creator",
-      platform: "YouTube",
-    })
-    setIsLoading(false)
+    setError(null)
+    setVideoInfo(null)
+
+    try {
+      const response = await fetch("/api/video-info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to fetch video info")
+      }
+
+      setVideoInfo({
+        id: data.id,
+        title: data.title,
+        duration: data.duration,
+        thumbnail: data.thumbnail,
+        uploader: data.uploader,
+        platform: data.extractor || "Unknown",
+        viewCount: data.viewCount,
+        likeCount: data.likeCount,
+        description: data.description,
+        webpage_url: data.webpage_url,
+        formats: data.formats,
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "An error occurred")
+    } finally {
+      setIsLoading(false)
+    }
   }, [url])
 
-  const handleDownload = useCallback(() => {
+  const handleDownload = useCallback(async () => {
     if (!videoInfo) return
 
-    const newDownload: DownloadItem = {
-      id: Date.now().toString(),
-      title: videoInfo.title,
-      platform: videoInfo.platform,
-      progress: 0,
-      status: "downloading",
-      format,
-      quality: format === "video" ? quality : "320kbps",
-      size: "Calculating...",
-    }
+    setError(null)
 
-    setDownloads((prev) => [newDownload, ...prev])
-    setVideoInfo(null)
-    setUrl("")
+    try {
+      const response = await fetch("/api/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          url: videoInfo.webpage_url || url,
+          format,
+          quality,
+        }),
+      })
 
-    // Simulate download progress
-    let progress = 0
-    const interval = setInterval(() => {
-      progress += Math.random() * 15
-      if (progress >= 100) {
-        progress = 100
-        clearInterval(interval)
-        setDownloads((prev) =>
-          prev.map((d) =>
-            d.id === newDownload.id
-              ? { ...d, progress: 100, status: "completed", size: "187 MB" }
-              : d
-          )
-        )
-      } else {
-        setDownloads((prev) =>
-          prev.map((d) =>
-            d.id === newDownload.id ? { ...d, progress: Math.round(progress) } : d
-          )
-        )
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to start download")
       }
-    }, 500)
-  }, [videoInfo, format, quality])
+
+      const newDownload: DownloadItem = {
+        id: data.downloadId,
+        title: videoInfo.title,
+        platform: videoInfo.platform,
+        progress: 0,
+        status: "downloading",
+        format,
+        quality: format === "video" ? quality : quality,
+        size: "Downloading...",
+      }
+
+      setDownloads(prev => [newDownload, ...prev])
+      setVideoInfo(null)
+      setUrl("")
+
+      // Start polling for progress
+      pollDownloadProgress(data.downloadId)
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start download")
+    }
+  }, [videoInfo, url, format, quality, pollDownloadProgress])
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && url.trim() && !isLoading) {
+      handleFetchInfo()
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -128,6 +223,14 @@ export default function Home() {
             Supports YouTube, Vimeo, TikTok, Twitter, and many more platforms.
           </p>
         </section>
+
+        {/* Error Alert */}
+        {error && (
+          <Alert variant="destructive" className="mb-6">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
         {/* Main Download Card */}
         <Card className="mb-8 border-border/50 bg-card/50 backdrop-blur">
@@ -149,6 +252,7 @@ export default function Home() {
                   placeholder="https://youtube.com/watch?v=..."
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
+                  onKeyDown={handleKeyDown}
                   className="pl-10 h-12 bg-secondary/50 border-border/50"
                 />
               </div>
@@ -175,7 +279,10 @@ export default function Home() {
                 <div className="flex gap-2">
                   <Button
                     variant={format === "video" ? "default" : "secondary"}
-                    onClick={() => setFormat("video")}
+                    onClick={() => {
+                      setFormat("video")
+                      setQuality("best")
+                    }}
                     className="flex-1"
                   >
                     <Film className="h-4 w-4 mr-2" />
@@ -183,7 +290,10 @@ export default function Home() {
                   </Button>
                   <Button
                     variant={format === "audio" ? "default" : "secondary"}
-                    onClick={() => setFormat("audio")}
+                    onClick={() => {
+                      setFormat("audio")
+                      setQuality("320k")
+                    }}
                     className="flex-1"
                   >
                     <Music className="h-4 w-4 mr-2" />
@@ -201,19 +311,19 @@ export default function Home() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="best">Best Available</SelectItem>
                     {format === "video" ? (
                       <>
+                        <SelectItem value="best">Best Available</SelectItem>
+                        <SelectItem value="2160p">4K (2160p)</SelectItem>
                         <SelectItem value="1080p">1080p (Full HD)</SelectItem>
                         <SelectItem value="720p">720p (HD)</SelectItem>
                         <SelectItem value="480p">480p (SD)</SelectItem>
-                        <SelectItem value="360p">360p (Low)</SelectItem>
                       </>
                     ) : (
                       <>
-                        <SelectItem value="1080p">320kbps (High)</SelectItem>
-                        <SelectItem value="720p">256kbps (Medium)</SelectItem>
-                        <SelectItem value="480p">128kbps (Low)</SelectItem>
+                        <SelectItem value="320k">320kbps (High)</SelectItem>
+                        <SelectItem value="192k">192kbps (Medium)</SelectItem>
+                        <SelectItem value="128k">128kbps (Low)</SelectItem>
                       </>
                     )}
                   </SelectContent>
@@ -224,11 +334,20 @@ export default function Home() {
             {/* Video Preview */}
             {videoInfo && (
               <VideoPreview
-                videoInfo={videoInfo}
+                videoInfo={{
+                  title: videoInfo.title,
+                  duration: formatDuration(videoInfo.duration),
+                  thumbnail: videoInfo.thumbnail,
+                  uploader: videoInfo.uploader,
+                  platform: videoInfo.platform,
+                  viewCount: videoInfo.viewCount,
+                  formats: videoInfo.formats,
+                }}
                 format={format}
                 quality={quality}
                 onDownload={handleDownload}
                 onCancel={() => setVideoInfo(null)}
+                formatSize={formatSize}
               />
             )}
           </CardContent>
@@ -319,7 +438,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-border/50 mt-16 py-8">
         <div className="container mx-auto px-4 text-center text-sm text-muted-foreground">
-          <p>Powered by youtube-dl • Supports 1000+ video platforms</p>
+          <p>Powered by yt-dlp - Supports 1000+ video platforms</p>
           <p className="mt-2">
             <a href="https://github.com/gairxx/git-tube" className="text-primary hover:underline">
               View on GitHub

@@ -15,6 +15,8 @@ export interface DownloadItem {
   format: string
   quality: string
   size: string
+  speed?: string
+  eta?: string
 }
 
 interface DownloadQueueProps {
@@ -85,8 +87,18 @@ export function DownloadQueue({ downloads, setDownloads }: DownloadQueueProps) {
                       <span>{download.platform}</span>
                       <span>•</span>
                       <span>{download.quality}</span>
-                      <span>•</span>
-                      <span>{download.size}</span>
+                      {download.speed && (
+                        <>
+                          <span>•</span>
+                          <span>{download.speed}</span>
+                        </>
+                      )}
+                      {download.eta && (
+                        <>
+                          <span>•</span>
+                          <span>ETA: {download.eta}</span>
+                        </>
+                      )}
                     </div>
                   </div>
                   <Badge
