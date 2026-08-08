@@ -1,10 +1,44 @@
-import type { Sandbox } from "@vercel/sandbox";
+import { Sandbox } from "@vercel/sandbox";
 
-// Directory inside the sandbox (relative to /vercel/sandbox) where yt-dlp writes files.
-export const DOWNLOADS_DIR = "downloads";
-export const YT_DLP_BIN = "/vercel/sandbox/.bin/yt-dlp";
-export const PROGRESS_LOG = "progress.log";
-export const DONE_FLAG = "done.flag";
+// A single long-lived sandbox is reused across every video-info lookup and
+// download instead of creating a fresh microVM (and reinstalling yt-dlp +
+// ffmpeg) per request. This turns an ~15-20s cold start into a one-time cost.
+export const WORKER_SANDBOX_NAME = "gittube-ytdlp-worker";
+
+// How long the shared worker sandbox stays alive between requests. It's
+// recreated automatically (via Sandbox.getOrCreate) if it ever expires.
+export const WORKER_TIMEOUT_MS = 45 * 60_000;
+
+// Root directory inside the sandbox (relative to the sandbox home, /vercel)
+// where per-download output/progress files live, namespaced by downloadId.
+export const DOWNLOADS_ROOT = "downloads";
+export const YT_DLP_BIN = "/vercel/.bin/yt-dlp";
+
+export function downloadDir(downloadId: string): string {
+  return `${DOWNLOADS_ROOT}/${downloadId}`;
+}
+export function progressLogPath(downloadId: string): string {
+  return `${downloadDir(downloadId)}/progress.log`;
+}
+export function doneFlagPath(downloadId: string): string {
+  return `${downloadDir(downloadId)}/done.flag`;
+}
+
+/**
+ * Gets the shared worker sandbox, creating it (and installing yt-dlp +
+ * ffmpeg) only the first time it's needed. Safe to call from any route —
+ * concurrent requests all resolve to the same underlying microVM.
+ */
+export async function getWorkerSandbox(): Promise<Sandbox> {
+  return Sandbox.getOrCreate({
+    name: WORKER_SANDBOX_NAME,
+    timeout: WORKER_TIMEOUT_MS,
+    onCreate: async (sbx) => {
+      await ensureYtDlp(sbx);
+      await ensureFfmpeg(sbx);
+    },
+  });
+}
 
 // User agent to bypass basic bot detection.
 export const USER_AGENT =

@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
 
     if (exitCode === 0) {
       const files = await sandbox.fs
-        .readdir(`/vercel/sandbox/${DOWNLOADS_DIR}`)
+        .readdir(DOWNLOADS_DIR)
         .catch(() => [] as string[]);
       const filename = files.length > 0 ? files[0] : parsed.filename;
 

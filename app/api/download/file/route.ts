@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
   }
 
   const files = await sandbox.fs
-    .readdir(`/vercel/sandbox/${DOWNLOADS_DIR}`)
+    .readdir(DOWNLOADS_DIR)
     .catch(() => [] as string[]);
 
   if (files.length === 0) {
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
 
   // Sandboxes auto-expire on their own timeout, so we intentionally don't
   // stop() here — doing so could cut the response off mid-stream.
-  return new Response(Readable.toWeb(stream) as ReadableStream, {
+  return new Response(Readable.toWeb(stream as Readable) as ReadableStream, {
     headers: {
       "Content-Type": contentTypeForExt(ext),
       "Content-Disposition": `attachment; filename="${encodeURIComponent(filename)}"`,
