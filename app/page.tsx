@@ -49,6 +49,19 @@ export default function Home() {
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
   const [downloads, setDownloads] = useState<DownloadItem[]>([])
   const pollingIntervals = useRef<Map<string, NodeJS.Timeout>>(new Map())
+  const triggeredDownloads = useRef<Set<string>>(new Set())
+
+  // Trigger a real browser download by pointing at the file-delivery route.
+  const triggerFileDownload = useCallback((downloadId: string) => {
+    if (triggeredDownloads.current.has(downloadId)) return
+    triggeredDownloads.current.add(downloadId)
+    const link = document.createElement("a")
+    link.href = `/api/download/file?id=${downloadId}`
+    link.rel = "noopener"
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  }, [])
 
   // Format duration from seconds to mm:ss or hh:mm:ss
   const formatDuration = (seconds: number): string => {
@@ -100,6 +113,10 @@ export default function Home() {
         if (data.status === "completed" || data.status === "error") {
           clearInterval(interval)
           pollingIntervals.current.delete(downloadId)
+
+          if (data.status === "completed") {
+            triggerFileDownload(downloadId)
+          }
         }
       } catch (err) {
         console.error("Error polling download:", err)
@@ -107,7 +124,7 @@ export default function Home() {
     }, 1000)
 
     pollingIntervals.current.set(downloadId, interval)
-  }, [])
+  }, [triggerFileDownload])
 
   // Cleanup polling on unmount
   useEffect(() => {

@@ -1,23 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "child_process";
-import { mkdir } from "fs/promises";
-import path from "path";
+import { Sandbox } from "@vercel/sandbox";
+import {
+  DONE_FLAG,
+  DOWNLOADS_DIR,
+  PROGRESS_LOG,
+  YT_DLP_BIN,
+  buildYtDlpArgs,
+  ensureFfmpeg,
+  ensureYtDlp,
+  generateDownloadId,
+  parseProgressLog,
+  shQuote,
+} from "@/lib/sandbox-ytdlp";
 
-const YT_DLP_PATH = process.env.YT_DLP_PATH || "/home/vercel-sandbox/.local/bin/yt-dlp";
-const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || "/tmp/downloads";
+// Downloads run as a detached background process inside the sandbox, so the
+// POST request itself should return quickly once the process has started.
+export const maxDuration = 120;
 
-// User agent to bypass bot detection
-const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
-
-// Store active downloads
-const activeDownloads = new Map<string, {
-  progress: number;
-  status: "downloading" | "completed" | "error" | "cancelled";
-  filename?: string;
-  error?: string;
-  speed?: string;
-  eta?: string;
-}>();
+// How long the sandbox is allowed to stay alive to finish the download.
+const SANDBOX_TIMEOUT_MS = 30 * 60_000;
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,123 +28,36 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "URL is required" }, { status: 400 });
     }
 
-    // Create downloads directory
-    await mkdir(DOWNLOADS_DIR, { recursive: true });
+    const downloadId = generateDownloadId();
 
-    // Generate download ID
-    const downloadId = `dl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-
-    // Initialize download tracking
-    activeDownloads.set(downloadId, {
-      progress: 0,
-      status: "downloading",
+    // A named sandbox lets later GET/DELETE requests (even from a different
+    // Function instance) reconnect to the same microVM via Sandbox.get().
+    const sandbox = await Sandbox.create({
+      name: downloadId,
+      timeout: SANDBOX_TIMEOUT_MS,
     });
 
-    // Build yt-dlp command arguments with anti-bot flags
-    const args: string[] = [
-      "--newline", // Output progress on new lines
-      "-o", path.join(DOWNLOADS_DIR, "%(title)s.%(ext)s"),
-      "--no-check-certificates",
-      "--user-agent", USER_AGENT,
-      "--extractor-args", "youtube:player_client=web,default;skip=hls,dash",
-      "--no-playlist",
-    ];
+    await sandbox.mkDir(DOWNLOADS_DIR);
+    await ensureYtDlp(sandbox);
+    await ensureFfmpeg(sandbox);
 
-    // Add format options
-    if (format === "audio") {
-      args.push("-x", "--audio-format", "mp3");
-      if (quality === "128k") {
-        args.push("--audio-quality", "128K");
-      } else if (quality === "192k") {
-        args.push("--audio-quality", "192K");
-      } else {
-        args.push("--audio-quality", "320K");
-      }
-    } else {
-      // Video format
-      if (quality === "2160p") {
-        args.push("-f", "bestvideo[height<=2160]+bestaudio/best[height<=2160]");
-      } else if (quality === "1080p") {
-        args.push("-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]");
-      } else if (quality === "720p") {
-        args.push("-f", "bestvideo[height<=720]+bestaudio/best[height<=720]");
-      } else if (quality === "480p") {
-        args.push("-f", "bestvideo[height<=480]+bestaudio/best[height<=480]");
-      } else {
-        args.push("-f", "best");
-      }
-    }
+    const args = buildYtDlpArgs({ url, format, quality });
+    const quotedCmd = [YT_DLP_BIN, ...args.map(shQuote)].join(" ");
 
-    args.push(url);
+    // Redirect all output to a log file and record the exit code to a flag
+    // file once done, so progress can be polled purely by reading files —
+    // no in-memory state needs to survive between requests.
+    const fullCommand = `${quotedCmd} > ${PROGRESS_LOG} 2>&1; echo $? > ${DONE_FLAG}`;
 
-    // Spawn yt-dlp process
-    const ytdlp = spawn(YT_DLP_PATH, args);
-
-    ytdlp.stdout.on("data", (data) => {
-      const output = data.toString();
-      console.log("[v0] yt-dlp output:", output);
-
-      // Parse progress
-      const progressMatch = output.match(/(\d+\.?\d*)%/);
-      if (progressMatch) {
-        const progress = parseFloat(progressMatch[1]);
-        const current = activeDownloads.get(downloadId);
-        if (current) {
-          current.progress = progress;
-          
-          // Parse speed
-          const speedMatch = output.match(/(\d+\.?\d*\s*[KMG]?i?B\/s)/);
-          if (speedMatch) {
-            current.speed = speedMatch[1];
-          }
-          
-          // Parse ETA
-          const etaMatch = output.match(/ETA\s+(\d+:\d+)/);
-          if (etaMatch) {
-            current.eta = etaMatch[1];
-          }
-        }
-      }
-
-      // Parse filename
-      const filenameMatch = output.match(/Destination:\s+(.+)/);
-      if (filenameMatch) {
-        const current = activeDownloads.get(downloadId);
-        if (current) {
-          current.filename = path.basename(filenameMatch[1]);
-        }
-      }
+    await sandbox.runCommand({
+      cmd: "sh",
+      args: ["-c", fullCommand],
+      detached: true,
     });
 
-    ytdlp.stderr.on("data", (data) => {
-      console.error("[v0] yt-dlp stderr:", data.toString());
-    });
-
-    ytdlp.on("close", (code) => {
-      const current = activeDownloads.get(downloadId);
-      if (current) {
-        if (code === 0) {
-          current.status = "completed";
-          current.progress = 100;
-        } else {
-          current.status = "error";
-          current.error = `Process exited with code ${code}`;
-        }
-      }
-    });
-
-    ytdlp.on("error", (error) => {
-      console.error("[v0] yt-dlp error:", error);
-      const current = activeDownloads.get(downloadId);
-      if (current) {
-        current.status = "error";
-        current.error = error.message;
-      }
-    });
-
-    return NextResponse.json({ 
+    return NextResponse.json({
       downloadId,
-      message: "Download started" 
+      message: "Download started",
     });
   } catch (error) {
     console.error("[v0] Error starting download:", error);
@@ -157,28 +71,70 @@ export async function POST(request: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const downloadId = request.nextUrl.searchParams.get("id");
-  
-  if (!downloadId) {
-    // Return all active downloads
-    const downloads = Object.fromEntries(activeDownloads);
-    return NextResponse.json(downloads);
-  }
 
-  const download = activeDownloads.get(downloadId);
-  if (!download) {
-    return NextResponse.json({ error: "Download not found" }, { status: 404 });
-  }
-
-  return NextResponse.json(download);
-}
-
-export async function DELETE(request: NextRequest) {
-  const downloadId = request.nextUrl.searchParams.get("id");
-  
   if (!downloadId) {
     return NextResponse.json({ error: "Download ID is required" }, { status: 400 });
   }
 
-  activeDownloads.delete(downloadId);
+  let sandbox;
+  try {
+    sandbox = await Sandbox.get({ name: downloadId });
+  } catch {
+    return NextResponse.json({ error: "Download not found" }, { status: 404 });
+  }
+
+  const logBuffer = await sandbox.readFileToBuffer({ path: PROGRESS_LOG });
+  const log = logBuffer ? logBuffer.toString("utf8") : "";
+  const parsed = parseProgressLog(log);
+
+  const doneBuffer = await sandbox.readFileToBuffer({ path: DONE_FLAG });
+
+  if (doneBuffer) {
+    const exitCode = parseInt(doneBuffer.toString("utf8").trim(), 10);
+
+    if (exitCode === 0) {
+      const files = await sandbox.fs
+        .readdir(`/vercel/sandbox/${DOWNLOADS_DIR}`)
+        .catch(() => [] as string[]);
+      const filename = files.length > 0 ? files[0] : parsed.filename;
+
+      return NextResponse.json({
+        progress: 100,
+        status: "completed",
+        filename,
+      });
+    }
+
+    const tail = log.split("\n").filter(Boolean).slice(-5).join("\n");
+    return NextResponse.json({
+      progress: parsed.progress ?? 0,
+      status: "error",
+      error: tail || `yt-dlp exited with code ${exitCode}`,
+    });
+  }
+
+  return NextResponse.json({
+    progress: parsed.progress ?? 0,
+    status: "downloading",
+    speed: parsed.speed,
+    eta: parsed.eta,
+    filename: parsed.filename,
+  });
+}
+
+export async function DELETE(request: NextRequest) {
+  const downloadId = request.nextUrl.searchParams.get("id");
+
+  if (!downloadId) {
+    return NextResponse.json({ error: "Download ID is required" }, { status: 400 });
+  }
+
+  try {
+    const sandbox = await Sandbox.get({ name: downloadId });
+    await sandbox.stop();
+  } catch {
+    // Sandbox may already be stopped/expired — nothing to clean up.
+  }
+
   return NextResponse.json({ message: "Download removed" });
 }
