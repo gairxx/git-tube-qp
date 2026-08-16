@@ -94,20 +94,101 @@ An [MCP](https://modelcontextprotocol.io) server in `mcp/` exposes GitTube to AI
 - `download_video` — download a video (quality: best/2160p/1080p/720p/480p)
 - `download_audio` — extract audio as MP3 (quality: 320k/192k/128k)
 
-Setup:
+The easiest way to install it is the installer — it will ask whether you want
+the MCP server, then which AI agents to configure it for:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gairxx/git-tube-qp/main/scripts/install.sh | bash
+```
+
+Manual setup:
 
 ```bash
 cd mcp && npm install
 ```
 
-Then register it with your MCP client, e.g.:
+Then give your agent the config for it. In all examples below, replace
+`/path/to/gitube` with the actual path to this repo, and note that the
+server entry point is `mcp/server.mjs`.
+
+#### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "gittube": {
       "command": "node",
-      "args": ["/absolute/path/to/gitube/mcp/server.mjs"]
+      "args": ["/path/to/gitube/mcp/server.mjs"]
+    }
+  }
+}
+```
+
+#### Claude Code
+
+Add to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "gittube": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/path/to/gitube/mcp/server.mjs"]
+    }
+  }
+}
+```
+
+or add it from the CLI:
+
+```bash
+claude mcp add gittube -- node /path/to/gitube/mcp/server.mjs
+```
+
+#### Cursor
+
+Add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "gittube": {
+      "command": "node",
+      "args": ["/path/to/gitube/mcp/server.mjs"]
+    }
+  }
+}
+```
+
+#### opencode
+
+Add to your `opencode.json`:
+
+```json
+{
+  "mcp": {
+    "gittube": {
+      "type": "local",
+      "command": ["node", "/path/to/gitube/mcp/server.mjs"],
+      "enabled": true
+    }
+  }
+}
+```
+
+#### Continue.dev
+
+Add to `~/.continue/config.json`:
+
+```json
+{
+  "mcpServers": {
+    "gittube": {
+      "command": "node",
+      "args": ["/path/to/gitube/mcp/server.mjs"]
     }
   }
 }

@@ -1,24 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# GitTube installer — installs the CLI, the desktop GUI, or both.
+# GitTube installer — installs the CLI, the desktop GUI, and/or the MCP
+# server (for AI agents).
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/gairxx/git-tube-qp/main/scripts/install.sh | bash
-#   bash install.sh --cli | --gui | --both   (skip the prompt)
+#   bash install.sh --cli | --gui | --both | --mcp | --all   (skip the prompts)
 #
 # Env overrides:
-#   GITTUBE_HOME      install dir base for the CLI (default: ~/.gittube)
-#   GITTUBE_RELEASE   GitHub release tag for the GUI (default: latest)
-#   GITTUBE_CLI_URL   full URL for the CLI script (testing)
+#   GITTUBE_HOME       install base for the CLI and MCP server (default: ~/.gittube)
+#   GITTUBE_RELEASE    GitHub release tag for the GUI (default: latest)
+#   GITTUBE_BASE_URL   base raw URL for downloads (default: GitHub main)
+#   GITTUBE_CLI_URL    full URL for the CLI script (overrides base)
 
 VERSION="${1:-main}"
 RELEASE_TAG="${GITTUBE_RELEASE:-latest}"
-INSTALL_DIR="${GITTUBE_HOME:-$HOME/.gittube}/bin"
-CLI_URL="${GITTUBE_CLI_URL:-https://raw.githubusercontent.com/gairxx/git-tube-qp/${VERSION}/scripts/gittube-cli.mjs}"
+HOME_DIR="${GITTUBE_HOME:-$HOME/.gittube}"
+INSTALL_DIR="$HOME_DIR/bin"
+MCP_DIR="$HOME_DIR/mcp"
+LIBS_DIR="$HOME_DIR/scripts"
+BASE_URL="${GITTUBE_BASE_URL:-https://raw.githubusercontent.com/gairxx/git-tube-qp/${VERSION}}"
+CLI_URL="${GITTUBE_CLI_URL:-$BASE_URL/scripts/gittube-cli.mjs}"
 
 DO_CLI=false
 DO_GUI=false
+DO_MCP=false
 
 # ---------------------------------------------------------------------------
 # Decide what to install
@@ -29,11 +36,13 @@ if [ $# -gt 0 ]; then
     --cli)  DO_CLI=true ;;
     --gui)  DO_GUI=true ;;
     --both) DO_CLI=true; DO_GUI=true ;;
-    *) echo "Error: unknown option \"$1\" (use --cli, --gui, or --both)" >&2; exit 1 ;;
+    --mcp)  DO_MCP=true ;;
+    --all)  DO_CLI=true; DO_GUI=true; DO_MCP=true ;;
+    *) echo "Error: unknown option \"$1\" (use --cli, --gui, --both, --mcp, or --all)" >&2; exit 1 ;;
   esac
 fi
 
-if ! $DO_CLI && ! $DO_GUI; then
+if ! $DO_CLI && ! $DO_GUI && ! $DO_MCP; then
   echo "What would you like to install?"
   echo "  1) CLI — the \"gittube\" command for downloads from a terminal"
   echo "  2) GUI — the GitTube desktop app"
@@ -46,6 +55,15 @@ if ! $DO_CLI && ! $DO_GUI; then
     2) DO_GUI=true ;;
     3) DO_CLI=true; DO_GUI=true ;;
     *) echo "Error: invalid choice \"$choice\"" >&2; exit 1 ;;
+  esac
+fi
+
+if ! $DO_MCP; then
+  printf "Install the GitTube MCP server so AI agents can download videos too? [y/N]: "
+  read -r -n 1 mcp_choice < /dev/tty || true
+  echo
+  case "$mcp_choice" in
+    y|Y) DO_MCP=true ;;
   esac
 fi
 
@@ -69,10 +87,6 @@ install_cli() {
   chmod +x "$INSTALL_DIR/gittube"
   echo "CLI installed to $INSTALL_DIR/gittube"
 }
-
-# ---------------------------------------------------------------------------
-# PATH
-# ---------------------------------------------------------------------------
 
 # Appends INSTALL_DIR to the user's shell rc file so `gittube` is on PATH
 # in new shells. Skips when already present.
@@ -145,6 +159,73 @@ install_gui() {
 }
 
 # ---------------------------------------------------------------------------
+# MCP server (for AI agents)
+# ---------------------------------------------------------------------------
+
+install_mcp() {
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Error: the MCP server needs Node.js, which was not found on PATH." >&2
+    echo "Install it from https://nodejs.org then re-run the installer." >&2
+    return 1
+  fi
+
+  mkdir -p "$MCP_DIR" "$LIBS_DIR"
+
+  echo "Downloading GitTube MCP server…"
+  for f in server.mjs package.json register.mjs; do
+    if ! curl -fsSL "$BASE_URL/mcp/$f" -o "$MCP_DIR/$f"; then
+      echo "Error: failed to download mcp/$f" >&2
+      return 1
+    fi
+  done
+  if ! curl -fsSL "$BASE_URL/scripts/gittube-lib.mjs" -o "$LIBS_DIR/gittube-lib.mjs"; then
+    echo "Error: failed to download scripts/gittube-lib.mjs" >&2
+    return 1
+  fi
+
+  echo "Installing MCP dependencies…"
+  if ! npm install --prefix "$MCP_DIR" --no-audit --no-fund --loglevel=error; then
+    echo "Error: npm install failed for the MCP server." >&2
+    return 1
+  fi
+
+  echo "MCP server installed to $MCP_DIR"
+}
+
+select_agents() {
+  echo
+  echo "Which AI agents should I configure GitTube for? (comma-separated numbers)"
+  echo "  1) Claude Desktop"
+  echo "  2) Claude Code"
+  echo "  3) Cursor"
+  echo "  4) opencode"
+  echo "  5) Continue.dev"
+  echo "  0) None"
+  printf "Numbers (e.g. 1,4): "
+  read -r agent_input < /dev/tty || true
+
+  local names=()
+  for n in $(echo "$agent_input" | tr ',' ' '); do
+    case "$n" in
+      1) names+=("claude-desktop") ;;
+      2) names+=("claude-code") ;;
+      3) names+=("cursor") ;;
+      4) names+=("opencode") ;;
+      5) names+=("continue") ;;
+    esac
+  done
+
+  if [ ${#names[@]} -gt 0 ]; then
+    local joined
+    joined="$(IFS=,; echo "${names[*]}")"
+    node "$MCP_DIR/register.mjs" "$MCP_DIR/server.mjs" "$joined"
+  else
+    echo "Skipped agent configuration. Later you can run:"
+    echo "  node $MCP_DIR/register.mjs"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 
@@ -154,6 +235,12 @@ if $DO_CLI; then
 fi
 if $DO_GUI; then
   install_gui && ok=true
+fi
+if $DO_MCP; then
+  if install_mcp; then
+    ok=true
+    select_agents
+  fi
 fi
 
 if ! $ok; then
@@ -176,4 +263,9 @@ fi
 if $DO_GUI; then
   echo
   echo "Open GitTube from /Applications."
+fi
+
+if $DO_MCP; then
+  echo
+  echo "MCP server registered. Restart your AI agent to pick it up."
 fi
