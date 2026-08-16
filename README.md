@@ -86,6 +86,33 @@ docker build -t gittube-cli .
 docker run --rm -v "$PWD":/downloads gittube-cli -v 1080p <url> /downloads
 ```
 
+### MCP server (for AI agents)
+
+An [MCP](https://modelcontextprotocol.io) server in `mcp/` exposes GitTube to AI tools and agents:
+
+- `video_info` — fetch metadata (title, duration, uploader, views, thumbnail)
+- `download_video` — download a video (quality: best/2160p/1080p/720p/480p)
+- `download_audio` — extract audio as MP3 (quality: 320k/192k/128k)
+
+Setup:
+
+```bash
+cd mcp && npm install
+```
+
+Then register it with your MCP client, e.g.:
+
+```json
+{
+  "mcpServers": {
+    "gittube": {
+      "command": "node",
+      "args": ["/absolute/path/to/gitube/mcp/server.mjs"]
+    }
+  }
+}
+```
+
 ## How it works
 
 - The UI is a Next.js (App Router) app served locally on `127.0.0.1:3123` by the Electron main process.
