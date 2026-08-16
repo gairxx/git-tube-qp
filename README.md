@@ -43,6 +43,49 @@ npm run dist:linux     # AppImage + .deb
 
 Artifacts are written to `release/`.
 
+## Command-line interface
+
+GitTube ships a standalone CLI (same yt-dlp engine) for quick downloads without the desktop app.
+
+### Install
+
+One command (requires Node.js):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gairxx/git-tube-qp/main/scripts/install.sh | bash
+```
+
+This installs `gittube` to `~/.gittube/bin` (add it to your PATH as instructed). Alternatively, install from the repo with npm:
+
+```bash
+npm run gittube            # from the repo
+npm install -g .           # global (from the repo)
+```
+
+### Usage
+
+```bash
+gittube -v [quality] <url> [save-location]   # video: best/2160p/1080p/720p/480p
+gittube -a [quality] <url> [save-location]   # audio: 320k/192k/128k (MP3)
+```
+
+Examples:
+
+```bash
+gittube -v https://youtu.be/abc123
+gittube -v 1080p https://youtu.be/abc123 ~/Movies
+gittube -a 128k https://youtu.be/abc123 ~/Music/song.mp3
+```
+
+`save-location` is a directory or full file path; it defaults to the current directory.
+
+### Container
+
+```bash
+docker build -t gittube-cli .
+docker run --rm -v "$PWD":/downloads gittube-cli -v 1080p <url> /downloads
+```
+
 ## How it works
 
 - The UI is a Next.js (App Router) app served locally on `127.0.0.1:3123` by the Electron main process.

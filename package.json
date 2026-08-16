@@ -4,11 +4,15 @@
   "description": "GitTube - download videos from 1000+ sites. A local desktop app powered by yt-dlp.",
   "private": true,
   "main": "electron/main.js",
+  "bin": {
+    "gittube": "scripts/gittube-cli.mjs"
+  },
   "scripts": {
     "dev": "next dev",
     "dev:app": "electron .",
     "build": "next build",
     "start": "next start",
+    "gittube": "node scripts/gittube-cli.mjs",
     "start:app": "npm run build && npm run prepare:standalone && electron .",
     "prepare:standalone": "node scripts/prepare-standalone.mjs",
     "dist": "npm run build && npm run prepare:standalone && electron-builder",
