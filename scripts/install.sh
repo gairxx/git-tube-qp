@@ -62,9 +62,41 @@ install_cli() {
 
   mkdir -p "$INSTALL_DIR"
   echo "Downloading gittube CLI…"
-  curl -fsSL "$CLI_URL" -o "$INSTALL_DIR/gittube"
+  if ! curl -fsSL "$CLI_URL" -o "$INSTALL_DIR/gittube"; then
+    echo "Error: failed to download the CLI from $CLI_URL" >&2
+    return 1
+  fi
   chmod +x "$INSTALL_DIR/gittube"
   echo "CLI installed to $INSTALL_DIR/gittube"
+}
+
+# ---------------------------------------------------------------------------
+# PATH
+# ---------------------------------------------------------------------------
+
+# Appends INSTALL_DIR to the user's shell rc file so `gittube` is on PATH
+# in new shells. Skips when already present.
+add_to_path() {
+  if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
+    return 0
+  fi
+
+  local rc line shell_name
+  shell_name="${SHELL##*/}"
+  case "$shell_name" in
+    zsh)   rc="$HOME/.zshrc" ;;
+    bash)  rc="$HOME/.bashrc" ;;
+    *)     rc="$HOME/.profile" ;;
+  esac
+
+  [ -f "$rc" ] || : > "$rc"
+  line="export PATH=\"\$PATH:$INSTALL_DIR\""
+  if grep -qF "$INSTALL_DIR" "$rc" 2>/dev/null; then
+    echo "gittube already on PATH ($rc)"
+  else
+    printf '\n# Added by the GitTube installer\nexport PATH="$PATH:%s"\n' "$INSTALL_DIR" >> "$rc"
+    echo "Added gittube to PATH in $rc"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -131,9 +163,9 @@ fi
 
 if $DO_CLI; then
   if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-    echo
-    echo "Add the CLI to your PATH (or add this to your ~/.zshrc / ~/.bashrc):"
-    echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
+    add_to_path
+  else
+    echo "gittube is already on PATH."
   fi
   echo
   echo "CLI usage:"
