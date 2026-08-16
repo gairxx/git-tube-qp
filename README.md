@@ -1,0 +1,75 @@
+# GitTube
+
+A local desktop app for downloading videos and audio from 1000+ sites, powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+
+Paste a video URL, choose your format and quality, and GitTube handles the rest — no accounts, no ads, nothing leaves your machine.
+
+## Features
+
+- **1000+ supported sites** — YouTube, Vimeo, Twitter/X, TikTok, Instagram, and more, via yt-dlp
+- **Video or audio extraction** — download MP4/WebM video at up to 2160p, or extract audio to MP3 at 128k/192k/320k
+- **Live progress** — per-download progress, speed, ETA, and filename updates in a queue
+- **Native save dialog** — choose where each file goes; completed files are revealed in your file manager
+- **Zero-config binaries** — downloads a standalone yt-dlp binary on first use and bundles ffmpeg, with automatic fallback to system installs
+- **Fully local** — a self-contained desktop app (Electron + Next.js standalone) with no remote backend
+- **Cross-platform** — build for macOS, Windows, and Linux
+
+## Getting Started
+
+### Development
+
+```bash
+npm install
+npm run dev:app
+```
+
+This starts the Next.js dev server and launches the Electron shell.
+
+### Build for production
+
+```bash
+npm run build          # build the Next.js app
+npm run prepare:standalone   # assemble the standalone output (static assets, public/, ffmpeg)
+npm run dist           # build + package for the current platform
+```
+
+Platform-specific packages:
+
+```bash
+npm run dist:mac       # .dmg + .zip
+npm run dist:win       # NSIS installer + portable
+npm run dist:linux     # AppImage + .deb
+```
+
+Artifacts are written to `release/`.
+
+## How it works
+
+- The UI is a Next.js (App Router) app served locally on `127.0.0.1:3123` by the Electron main process.
+- Pasted URLs are resolved via `yt-dlp --dump-json` through `app/api/video-info`.
+- Downloads run as `yt-dlp` child processes in per-job directories under `~/.gittube/downloads`; progress and completion are read from a log file and an exit-code flag so the status API never blocks.
+- On completion the Electron main process opens a native save dialog (`electron/main.js`) and copies the file to your chosen location.
+
+## Configuration
+
+Environment variables:
+
+| Variable | Description |
+| --- | --- |
+| `YTDLP_PATH` | Use a specific yt-dlp binary instead of the auto-downloaded/autodetected one |
+| `FFMPEG_PATH` | Use a specific ffmpeg binary instead of the bundled/system one |
+| `GITTUBE_HOME` | Override the data directory (defaults to `~/.gittube`) |
+| `GITTUBE_PORT` | Override the local server port (defaults to `3123`) |
+
+## Tech stack
+
+- [Next.js](https://nextjs.org) 16 (App Router) + React 19
+- [Electron](https://www.electronjs.org) with a preload bridge for native save dialogs
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) for extraction and downloading
+- [ffmpeg-static](https://github.com/eugeneware/ffmpeg-static) for media processing
+- [Tailwind CSS](https://tailwindcss.com) + [shadcn/ui](https://ui.shadcn.com)
+- [electron-builder](https://www.electron.build) for packaging
+
+## License
+
+Private project.
