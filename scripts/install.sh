@@ -48,9 +48,8 @@ if ! $DO_CLI && ! $DO_GUI && ! $DO_MCP; then
   echo "  2) GUI — the GitTube desktop app"
   echo "  3) Both"
   printf "Choose 1, 2, or 3: "
-  read -r -n 1 choice < /dev/tty || exit 1
-  echo
-  case "$choice" in
+  read -r choice < /dev/tty || exit 1
+  case "$(echo "$choice" | tr -d '[:space:]')" in
     1) DO_CLI=true ;;
     2) DO_GUI=true ;;
     3) DO_CLI=true; DO_GUI=true ;;
@@ -60,9 +59,8 @@ fi
 
 if ! $DO_MCP; then
   printf "Install the GitTube MCP server so AI agents can download videos too? [y/N]: "
-  read -r -n 1 mcp_choice < /dev/tty || true
-  echo
-  case "$mcp_choice" in
+  read -r mcp_choice < /dev/tty || true
+  case "$(echo "$mcp_choice" | tr -d '[:space:]')" in
     y|Y) DO_MCP=true ;;
   esac
 fi
