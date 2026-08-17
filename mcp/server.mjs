@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// GitTube MCP server — lets AI agents download videos/audio with yt-dlp.
+// GitTube MCP server — lets AI agents search, discover, and download
+// videos/audio from 1000+ sites with yt-dlp.
 //
 // Tools:
-//   video_info     fetch metadata for a URL (title, duration, uploader, …)
-//   download_video download a video (quality: best/2160p/1080p/720p/480p)
-//   download_audio extract audio as MP3 (quality: 320k/192k/128k)
+//   search           search YouTube for videos by query
+//   video_info       fetch metadata for a URL (title, duration, uploader, …)
+//   download_video   download a video (quality: best/2160p/1080p/720p/480p)
+//   download_audio   extract audio as MP3 (quality: 320k/192k/128k)
 //
 // Register with clients, e.g.:
 //   "mcpServers": {
@@ -16,12 +18,104 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import os from "node:os";
 import path from "node:path";
-import { download, fetchVideoInfo } from "../scripts/gittube-lib.mjs";
+import { spawn, spawnSync } from "node:child_process";
+import { download, fetchVideoInfo, getYtDlpPath, USER_AGENT } from "../scripts/gittube-lib.mjs";
 
 const VIDEO_QUALITIES = ["best", "480p", "720p", "1080p", "2160p"];
 const AUDIO_QUALITIES = ["320k", "192k", "128k"];
 
 const server = new McpServer({ name: "gittube", version: "1.0.0" });
+
+// ---------------------------------------------------------------------------
+// search
+// ---------------------------------------------------------------------------
+
+// Runs yt-dlp with `ytsearchN:<query>` and returns parsed results.
+async function ytDlpSearch(query, maxResults = 10, timeoutMs = 60_000) {
+  const ytDlp = await getYtDlpPath();
+  const searchQuery = `ytsearch${maxResults}:${query}`;
+  const args = [
+    "--dump-json",
+    "--no-download",
+    "--no-warnings",
+    "--no-check-certificates",
+    "--user-agent",
+    USER_AGENT,
+    "--flat-playlist",
+    "--playlist-items", `1:${maxResults}`,
+    searchQuery,
+  ];
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(ytDlp, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+
+    const timer = setTimeout(() => {
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      resolve({ exitCode: 1, results: [], error: `Search timed out after ${timeoutMs / 1000}s` });
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        return resolve({ exitCode: code, results: [], error: stderr || `yt-dlp exited with code ${code}` });
+      }
+      // yt-dlp outputs one JSON object per line for playlist/flat-playlist mode.
+      // For ytsearch it outputs a single JSON object per result.
+      const results = stdout
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          try {
+            const info = JSON.parse(line);
+            return {
+              id: info.id,
+              title: info.title,
+              channel: info.channel || info.uploader,
+              duration_seconds: info.duration,
+              url: info.webpage_url || `https://www.youtube.com/watch?v=${info.id}`,
+              thumbnail: info.thumbnails?.[0]?.url || info.thumbnail,
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+      resolve({ exitCode: 0, results });
+    });
+  });
+}
+
+server.tool(
+  "search",
+  "Search YouTube for videos matching a query. Returns top 10 results with title, channel, duration, and URL.",
+  {
+    query: z.string().describe("Search query (e.g. 'how to make sourdough bread')"),
+    maxResults: z.number().min(1).max(20).default(10).describe("Number of results (1-20, default 10)"),
+  },
+  async ({ query, maxResults }) => {
+    try {
+      const { exitCode, results, error } = await ytDlpSearch(query, maxResults);
+      if (exitCode !== 0 || results.length === 0) {
+        return {
+          content: [{ type: "text", text: `No results found for "${query}".${error ? ` Error: ${error}` : ""}` }],
+          isError: exitCode !== 0,
+        };
+      }
+      const formatted = results.map((r, i) =>
+        `${i + 1}. **${r.title}**\n   Channel: ${r.channel || "unknown"}\n   Duration: ${r.duration_seconds ? `${Math.floor(r.duration_seconds / 60)}m ${r.duration_seconds % 60}s` : "unknown"}\n   URL: ${r.url}`
+      ).join("\n\n");
+      return { content: [{ type: "text", text: `Found ${results.length} results for "${query}":\n\n${formatted}` }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Search failed: ${err.message}` }], isError: true };
+    }
+  }
+);
 
 server.tool(
   "video_info",

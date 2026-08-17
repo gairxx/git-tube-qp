@@ -90,6 +90,7 @@ docker run --rm -v "$PWD":/downloads gittube-cli -v 1080p <url> /downloads
 
 An [MCP](https://modelcontextprotocol.io) server in `mcp/` exposes GitTube to AI tools and agents:
 
+- `search` — search YouTube for videos by query (returns top 10 with title, channel, duration, URL)
 - `video_info` — fetch metadata (title, duration, uploader, views, thumbnail)
 - `download_video` — download a video (quality: best/2160p/1080p/720p/480p)
 - `download_audio` — extract audio as MP3 (quality: 320k/192k/128k)
