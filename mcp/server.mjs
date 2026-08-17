@@ -19,7 +19,7 @@ import { z } from "zod";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { download, fetchVideoInfo, getYtDlpPath, USER_AGENT } from "../scripts/gittube-lib.mjs";
+import { download, fetchVideoInfo, getYtDlpPath, USER_AGENT, listPlaylist, downloadPlaylist } from "../scripts/gittube-lib.mjs";
 
 const VIDEO_QUALITIES = ["best", "480p", "720p", "1080p", "2160p"];
 const AUDIO_QUALITIES = ["320k", "192k", "128k"];
@@ -113,6 +113,77 @@ server.tool(
       return { content: [{ type: "text", text: `Found ${results.length} results for "${query}":\n\n${formatted}` }] };
     } catch (err) {
       return { content: [{ type: "text", text: `Search failed: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// list_playlist
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "list_playlist",
+  "List all videos in a YouTube playlist with title, channel, duration, and URL. No downloads.",
+  {
+    url: z.string().url().describe("YouTube playlist URL"),
+  },
+  async ({ url }) => {
+    try {
+      const { exitCode, playlist, error } = await listPlaylist(url);
+      if (exitCode !== 0 || !playlist) {
+        return {
+          content: [{ type: "text", text: `Failed to list playlist: ${error || "Unknown error"}` }],
+          isError: true,
+        };
+      }
+      const summary = [
+        `**${playlist.title}**`,
+        `Total videos: ${playlist.video_count}`,
+        `Total duration: ${Math.floor(playlist.total_duration_seconds / 3600)}h ${Math.floor((playlist.total_duration_seconds % 3600) / 60)}m`,
+        "",
+        "Videos:",
+        "",
+      ];
+      for (const v of playlist.videos) {
+        const dur = v.duration_seconds
+          ? `${Math.floor(v.duration_seconds / 60)}m ${v.duration_seconds % 60}s`
+          : "?";
+        summary.push(`${v.index}. **${v.title}** — ${v.channel || "unknown"} — ${dur}`);
+        summary.push(`   ${v.url}`);
+        summary.push("");
+      }
+      return { content: [{ type: "text", text: summary.join("\n") }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `List playlist failed: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
+// download_playlist
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "download_playlist",
+  "Download all videos in a YouTube playlist. Returns count and directory.",
+  {
+    url: z.string().url().describe("YouTube playlist URL"),
+    format: z.enum(["video", "audio"]).default("video").describe("video = MP4, audio = MP3"),
+    quality: z.string().describe("Video: best/2160p/1080p/720p/480p  Audio: 320k/192k/128k"),
+    saveLocation: z.string().optional().describe("Directory or file path. Defaults to current directory."),
+  },
+  async ({ url, format, quality, saveLocation }) => {
+    try {
+      const result = await downloadPlaylist({ url, format, quality, saveLocation });
+      const summary = [
+        `Downloaded ${result.count} videos to ${result.dir}`,
+        "",
+        "Files:",
+        result.downloaded.map((v) => `  ${v.index}. ${v.title}`).join("\n"),
+      ].join("\n");
+      return { content: [{ type: "text", text: summary }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Playlist download failed: ${err.message}` }], isError: true };
     }
   }
 );

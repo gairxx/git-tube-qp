@@ -8,6 +8,8 @@ Paste a video URL, choose your format and quality, and GitTube handles the rest 
 
 - **1000+ supported sites** — YouTube, Vimeo, Twitter/X, TikTok, Instagram, and more, via yt-dlp
 - **Video or audio extraction** — download MP4/WebM video at up to 2160p, or extract audio to MP3 at 128k/192k/320k
+- **Playlist support** — list and download entire YouTube playlists with one command
+- **Search YouTube** — search for videos by query and get results with title, channel, duration, and URL
 - **Live progress** — per-download progress, speed, ETA, and filename updates in a queue
 - **Native save dialog** — choose where each file goes; completed files are revealed in your file manager
 - **Zero-config binaries** — downloads a standalone yt-dlp binary on first use and bundles ffmpeg, with automatic fallback to system installs
@@ -67,6 +69,9 @@ npm install -g .           # global (from the repo)
 ```bash
 gittube -v [quality] <url> [save-location]   # video: best/2160p/1080p/720p/480p
 gittube -a [quality] <url> [save-location]   # audio: 320k/192k/128k (MP3)
+gittube --playlist -v [quality] <url> [save-location]  # download playlist
+gittube --list-playlist <url>   # list playlist videos
+gittube --search <query>        # search YouTube
 ```
 
 Examples:
@@ -75,6 +80,9 @@ Examples:
 gittube -v https://youtu.be/abc123
 gittube -v 1080p https://youtu.be/abc123 ~/Movies
 gittube -a 128k https://youtu.be/abc123 ~/Music/song.mp3
+gittube --playlist -v 1080p https://youtube.com/playlist?list=PLxxx ~/Videos
+gittube --list-playlist https://youtube.com/playlist?list=PLxxx
+gittube --search "lofi hip hop beats"
 ```
 
 `save-location` is a directory or full file path; it defaults to the current directory.
@@ -91,6 +99,8 @@ docker run --rm -v "$PWD":/downloads gittube-cli -v 1080p <url> /downloads
 An [MCP](https://modelcontextprotocol.io) server in `mcp/` exposes GitTube to AI tools and agents:
 
 - `search` — search YouTube for videos by query (returns top 10 with title, channel, duration, URL)
+- `list_playlist` — list all videos in a YouTube playlist with title, channel, duration, and URL
+- `download_playlist` — download all videos in a playlist
 - `video_info` — fetch metadata (title, duration, uploader, views, thumbnail)
 - `download_video` — download a video (quality: best/2160p/1080p/720p/480p)
 - `download_audio` — extract audio as MP3 (quality: 320k/192k/128k)

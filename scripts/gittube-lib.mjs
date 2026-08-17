@@ -123,7 +123,7 @@ export function resolveFfmpegPath() {
 // yt-dlp args
 // ---------------------------------------------------------------------------
 
-export function buildYtDlpArgs({ url, format = "video", quality = "best" }) {
+export function buildYtDlpArgs({ url, format = "video", quality = "best", allowPlaylist = false }) {
   const args = [
     "--newline",
     "--no-check-certificates",
@@ -131,8 +131,11 @@ export function buildYtDlpArgs({ url, format = "video", quality = "best" }) {
     USER_AGENT,
     "--extractor-args",
     "youtube:player_client=web,default;skip=hls,dash",
-    "--no-playlist",
   ];
+
+  if (!allowPlaylist) {
+    args.push("--no-playlist");
+  }
 
   if (format === "audio") {
     const q = quality || "320k";
@@ -215,6 +218,151 @@ function parseOutputFile(log, cwd) {
     }
   }
   return newest;
+}
+
+// ---------------------------------------------------------------------------
+// Playlist support
+// ---------------------------------------------------------------------------
+
+// List playlist videos with metadata (no downloads). Resolves with { exitCode, playlist }.
+export async function listPlaylist(url, timeoutMs = 120_000) {
+  const ytDlp = await getYtDlpPath();
+  const args = [
+    "--dump-json",
+    "--no-download",
+    "--no-warnings",
+    "--no-check-certificates",
+    "--user-agent",
+    USER_AGENT,
+    "--extractor-args",
+    "youtube:player_client=web,default;skip=hls,dash",
+    "--flat-playlist",
+    "--playlist-items",
+    "1:500", // up to 500 videos
+    url,
+  ];
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(ytDlp, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+
+    const timer = setTimeout(() => {
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      resolve({ exitCode: 1, playlist: null, error: `Playlist fetch timed out after ${timeoutMs / 1000}s` });
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        return resolve({ exitCode: code, playlist: null, error: stderr });
+      }
+
+      const videos = [];
+      let playlistTitle = null;
+
+      for (const line of stdout.trim().split("\n").filter(Boolean)) {
+        try {
+          const info = JSON.parse(line);
+          if (info._type === "playlist") {
+            playlistTitle = info.title;
+          } else {
+            videos.push({
+              index: info.playlist_index || videos.length + 1,
+              id: info.id,
+              title: info.title,
+              channel: info.channel || info.uploader,
+              duration_seconds: info.duration,
+              url: info.webpage_url || `https://www.youtube.com/watch?v=${info.id}`,
+            });
+          }
+        } catch { /* skip malformed lines */ }
+      }
+
+      resolve({
+        exitCode: 0,
+        playlist: {
+          title: playlistTitle || videos[0]?.title || "Unknown Playlist",
+          video_count: videos.length,
+          total_duration_seconds: videos.reduce((sum, v) => sum + (v.duration_seconds || 0), 0),
+          videos,
+        },
+      });
+    });
+  });
+}
+
+// Download all videos in a playlist. Returns list of { title, file, url }.
+export async function downloadPlaylist({ url, format = "video", quality = "best", saveLocation, onProgress }) {
+  const ytDlp = await getYtDlpPath();
+  const ffmpeg = resolveFfmpegPath();
+
+  const args = buildYtDlpArgs({ url, format, quality, allowPlaylist: true });
+  if (ffmpeg) {
+    args.unshift("--ffmpeg-location", path.dirname(ffmpeg));
+  }
+
+  const { cwd, outputTemplate } = parseSaveLocation(saveLocation);
+  // For playlists, use a subdirectory based on playlist title
+  args.push("-o", outputTemplate, "--yes-playlist", url);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(ytDlp, args, { cwd, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+
+    let log = "";
+    const downloaded = [];
+    let currentVideo = null;
+
+    const onData = (chunk) => {
+      const text = chunk.toString();
+      log += text;
+
+      // Detect download starts to track current video
+      const videoMatch = text.match(/\[download\]\s+Downloading item\s+(\d+)/);
+      if (videoMatch) {
+        currentVideo = { index: parseInt(videoMatch[1]), title: null, file: null };
+      }
+
+      // Extract title from download info
+      const titleMatch = text.match(/\[download\]\s+(?:Destination|Downloading)\s+(.+)/);
+      if (titleMatch && currentVideo) {
+        currentVideo.title = path.basename(titleMatch[1].trim(), path.extname(titleMatch[1]));
+        currentVideo.file = titleMatch[1].trim();
+      }
+
+      // Detect video completion
+      const destMatch = text.match(/\[download\]\s+(.+?)\s+has already been downloaded/);
+      const completeMatch = text.match(/\[download\]\s+100%\s+of\s+.+? in\s+/);
+      if ((destMatch || completeMatch) && currentVideo) {
+        downloaded.push({
+          index: currentVideo.index,
+          title: currentVideo.title || `Video ${currentVideo.index}`,
+          file: currentVideo.file || null,
+        });
+        currentVideo = null;
+      }
+
+      if (onProgress) onProgress(text);
+    };
+
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0) {
+        resolve({ dir: cwd, downloaded, count: downloaded.length, log });
+      } else {
+        reject(
+          new Error(
+            `yt-dlp exited with code ${code}\n${log.trim().split("\n").slice(-5).join("\n")}`
+          )
+        );
+      }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
